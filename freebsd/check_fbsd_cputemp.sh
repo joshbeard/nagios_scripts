@@ -2,6 +2,7 @@
 #####################################################################
 # Josh Beard <josh at signalboxes.net>
 # http://www.signalboxes.net/
+# Last Modified: Sun 10 Jun 2012 03:25:12 AM MDT
 # Check CPU temperature in FreeBSD
 # Requires the 'coretemp' kernel module
 # Original idea from nickebo http://www.nickebo.net/ (Python)
@@ -12,7 +13,7 @@ kldstat -q -m cpu/coretemp
 mod=$?
 if [ $mod -ne 0 ]; then
 	printf "Error: You don't have the 'coretemp' module loaded.\n"
-	exit 4
+	exit 3
 fi
 
 #####################################################################
@@ -23,7 +24,10 @@ show_help() {
 	printf "  -C    The core number to check\n"
 	printf "  -w    The warning value\n"
 	printf "  -c    The critical value\n"
-	printf "  -f    Show temperature in Farenheit\n"
+	printf "  -f    Show temperature in Farenheit\n\n"
+	printf "  -a    Show all cores in a single average\n"
+	printf "  -d    Show each CPU in average details\n"
+	printf "  -e    Warn/Critical for each core\n\n"
 	printf "  -h    Show this help\n\n"
 	printf "  see 'sysctl -a | grep temperature'\n"
 }
@@ -36,52 +40,102 @@ ctof() {
 	printf "$f"
 }
 
+get_core_temp() {
+	CORE=$1
+	CORETEMP=$(sysctl -n dev.cpu.${CORE}.temperature|cut -d . -f 1)
+	printf "${CORETEMP}"
+}
+
+exit_condition() {
+	if [ $1 -ge $CRITICAL ]; then
+		RET="CRITICAL"
+		EXIT=2
+	elif [ $1 -ge $WARNING ]; then
+		RET="WARNING"
+		EXIT=1
+	else
+		RET="OK"
+		EXIT=0
+	fi
+}
+
 #####################################################################
 
 ## Get command arguments/options
-while getopts hfC:w:c: o; do
+while getopts hadfeC:w:c: o; do
 	case "$o" in
 		C) CORE=$OPTARG;;
 		w) WARNING=$OPTARG;;
 		c) CRITICAL=$OPTARG;;
 		f) FARENHEIT=1;;
-		h) show_help;;
+		a) AVERAGE=1;;
+		d) SHOWDETAILS=1;;
+		e) EACHCORE=1;;
+		h) show_help;exit 0;;
 	esac
 done
 
 ## Check if required arguments were provided
-if [ -z $CORE ]; then
+if [ ! -z $AVERAGE ] && [ $AVERAGE -ne 1 ] && [ -z $CORE ] || [ -z $WARNING ] || [ -z $CRITICAL ]; then
 	show_help
+	exit 3
+fi
+
+if [ $WARNING -ge $CRITICAL ]; then
+	printf "Your WARNING threshold must be less than the critical threshold.\n"
 	exit 3
 fi
 
 
 #####################################################################
 
-## Get the core's temperature via sysctl
-TEMP=$(sysctl -hn dev.cpu.${CORE}.temperature)
+if [ ! -z $AVERAGE ] && [ ${AVERAGE} -eq 1 ]; then
+	CPUS=$(sysctl -n hw.ncpu)
+	i=0
+	TEMP=0
+	DETAILS=""
+	PERFDATA=""
+	while [ ${i} -lt ${CPUS} ]; do
+		CORETEMP=$(get_core_temp $i)
 
-## Get the non-decimal value of temperature
-TEMP=$(echo ${TEMP} |cut -d . -f 1)
+		## Convert to Farenheit if needed (do this now for perfdata)
+		[ ! -z ${FARENHEIT} ] && [ ${FARENHEIT} -eq 1 ] && CORETEMP=$(ctof $CORETEMP)
 
-## Convert to farenheit if the user wants
-[ ${FARENHEIT} -eq 1 ] && TEMP=$(ctof $TEMP)
+		TEMP=$(( ${CORETEMP}+${TEMP}))
+		DETAILS="${DETAILS}CPU${i}_Temp=${CORETEMP}"
 
-## Check the thresholds
-if [ ! -z $CRITICAL ] && [ $TEMP -ge $CRITICAL ]; then
-	RET="CRITICAL"
-	EXIT=2
-elif [ ! -z $WARNING ] && [ $TEMP -ge $WARNING ]; then
-	RET="WARNING"
-	EXIT=1
+		i=$(( ${i} + 1 ))
+
+		if [ $i -le $CPUS ]; then
+			DETAILS="${DETAILS} "
+			PERFDATA="${PERFDATA}CPU${i}_Temp=${CORETEMP};${WARNING};${CRITICAL} "
+		fi
+
+		exit_condition $CORETEMP
+
+	done
+
+	CORE="average"
+	TEMP=$(($TEMP/$CPUS))
+	[ ! -z ${FARENHEIT} ] && [ ${FARENHEIT} -eq 1 ] && UNIT="F" || UNIT="C"
+
+	[ ! -z $SHOWDETAILS ] && [ $SHOWDETAILS -eq 1 ] &&
+		PERFDATA="Average=${TEMP};$WARNING;$CRITICAL ${PERFDATA}" || PERFDATA="Average=${TEMP};$WARNING;$CRITICAL"
+
 else
-	RET="OK"
-	EXIT=0
+	TEMP=$(get_core_temp ${CORE})
+	[ ! -z ${FARENHEIT} ] && [ ${FARENHEIT} -eq 1 ] && TEMP=$(ctof $TEMP)
+	PERFDATA="CPU${CORE}_Temp=$TEMP;$WARNING;$CRITICAL"
+
+	exit_condition $TEMP
 fi
+
+[ ! -z ${FARENHEIT} ] && [ ${FARENHEIT} -eq 1 ] && UNIT="F" || UNIT="C"
 
 #####################################################################
 ## Exit with output and perfdata
-printf "${RET}: CPU $CORE is ${TEMP}${UNIT}|${TEMP}\n"
+[ ! -z $SHOWDETAILS ] && [ $SHOWDETAILS -eq 1 ] && [ ! -z "$DETAILS" ] && DETAILS=" (${DETAILS})" || DETAILS=""
+printf "${RET}: CPU $CORE is ${TEMP}${UNIT}${DETAILS}|${PERFDATA}\n"
 exit $EXIT
 
 #EOF
