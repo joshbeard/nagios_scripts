@@ -1,7 +1,7 @@
 #!/bin/sh
 ###############################################################################
-# Last Modified: Mon 03 Dec 2012 02:46:43 PM MST
-# check open files (GNU/Linux and FreeBSD)
+# Last Modified: Mon 03 Dec 2012 02:57:02 PM MST
+# check open files (GNU/Linux, FreeBSD, and Darwin)
 #
 # Uses /proc/sys/fs/file-nr on Linux to determine  values
 # Uses sysctl on FreeBSD to determine values
@@ -27,6 +27,10 @@ if [ "$_os" = "Linux" ]; then
 elif [ "$_os" = "FreeBSD" ]; then
 	MAX_FILES=$(sysctl -n kern.maxfiles)
 	OPEN_FILES=$(sysctl -n kern.openfiles)
+	_use="sysctl"
+elif [ "$_os" = "Darwin" ]; then
+	MAX_FILES=$(sysctl -n kern.maxfiles)
+	OPEN_FILES=$(sysctl -n kern.num_files)
 	_use="sysctl"
 else
 	printf "Sorry, $(uname) is unknown.  You can modify this script to make it work, though.\n"
